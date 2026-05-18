@@ -205,3 +205,39 @@ test('fix — limit option', t => {
   const result = safe.fix(RegExp(Array(27).join('a?') + Array(27).join('a')), { limit: 24 })
   t.assert.strictEqual(result.fixed, null, 'Unfixable at limit 24')
 })
+
+test('fix — general prefix overlap returns null', t => {
+  const cases = [
+    '(ab|abc)+',
+    '(12|123)+',
+    '(cat|cater|caterpillar)+',
+    '(?:(ab|abc))+'  // nested group requires recursive findGroupWithOptions
+  ]
+  t.plan(cases.length)
+  for (const re of cases) {
+    const result = safe.fix(re)
+    t.assert.strictEqual(result.fixed, null, 'Expected ' + re + ' fixed to be null')
+  }
+})
+
+test('analyze — general prefix overlap', t => {
+  const cases = [
+    '(ab|abc)+',
+    '(12|123)+',
+    '(?:(ab|abc))+'
+  ]
+  t.plan(cases.length * 3)
+  for (const re of cases) {
+    const result = safe.analyze(re)
+    t.assert.strictEqual(result.hasAlternationReDoS, true, re + ' should detect alternation overlap')
+    t.assert.strictEqual(result.severity, 'high', re + ' should be high severity')
+    t.assert.strictEqual(result.fix, null, re + ' should have no fix')
+  }
+})
+
+test('analyze — high severity from rep count', t => {
+  const result = safe.analyze('a{1,2}a{1,2}a{1,2}', { limit: 1 })
+  t.assert.strictEqual(result.safe, false, 'Should be unsafe')
+  t.assert.strictEqual(result.severity, 'high', 'Should be high severity from rep count')
+  t.assert.strictEqual(result.starHeight, 1, 'Star height should be 1')
+})

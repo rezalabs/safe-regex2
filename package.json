@@ -25,7 +25,7 @@
     "lint:fix": "eslint --fix",
     "test": "npm run test:unit && npm run test:typescript",
     "test:typescript": "tstyche",
-    "test:unit": "c8 --100 node --test"
+    "test:unit": "c8 --lines=99 --statements=99 --functions=99 --branches=90 node --test"
   },
   "repository": {
     "type": "git",

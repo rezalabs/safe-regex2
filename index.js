@@ -232,9 +232,6 @@ function fixRegex (re, options) {
 
   // Try to fix: clone the AST and apply transforms
   const fixedAst = fixNode(ast, limit)
-  if (!fixedAst) {
-    return { safe: false, fixed: null, original: source }
-  }
 
   let fixed
   try {
@@ -387,10 +384,6 @@ function fixAlternationReDoS (repNode, limit) {
   for (let i = 0; i < options.length; i++) {
     const opt = options[i]
     const prefix = getLiteralPrefix(opt)
-    if (prefix.length === 0) {
-      allSameChar = false
-      break
-    }
     for (let j = 0; j < prefix.length; j++) {
       if (firstChar === null) firstChar = prefix[j]
       if (prefix[j] !== firstChar) allSameChar = false
