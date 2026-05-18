@@ -1,0 +1,13 @@
+*.log
+.eslint*
+.github/
+.gitignore
+.npmignore
+.npmrc
+.pi/
+AGENTS.md
+eslint.config.js
+example/
+node_modules/
+test/
+types/index.tst.ts
