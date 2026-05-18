@@ -58,4 +58,4 @@ npm run test:typescript
 npm run lint
 ```
 
-`test:unit` enforces 100% coverage (`c8 --100`). If a new code path was added, a test must cover it or the suite fails.
+Tests run via `node --test`. Coverage enforced in CI via `node --experimental-test-coverage` with thresholds (lines 99%, functions 99%, branches 90%).
