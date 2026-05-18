@@ -1,4 +1,5 @@
 name: Lock Threads
+run-name: Lock stale threads
 
 on:
   schedule:
