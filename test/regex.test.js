@@ -16,7 +16,6 @@ const good = [
 ]
 
 test('safe regex', t => {
-  t.plan(good.length)
   good.forEach(function (re) {
     t.assert.strictEqual(safe(re), true, `Expected ${re} to be safe`)
   })
@@ -38,7 +37,6 @@ const bad = [
 ]
 
 test('unsafe regex', t => {
-  t.plan(bad.length)
   bad.forEach(function (re) {
     t.assert.strictEqual(safe(re), false)
   })
@@ -58,7 +56,6 @@ const invalid = [
 ]
 
 test('invalid regex', t => {
-  t.plan(invalid.length)
   invalid.forEach(function (re) {
     t.assert.strictEqual(safe(re), false)
   })
@@ -73,7 +70,6 @@ test('analyze — safe patterns', t => {
     '(abc|def)+',
     'a+b+'
   ]
-  t.plan(patterns.length * 2)
   for (const re of patterns) {
     const result = safe.analyze(re)
     t.assert.strictEqual(result.safe, true, `Expected ${re} to be safe`)
@@ -88,7 +84,6 @@ test('analyze — nested repetition severity', t => {
     { re: '((a+)+)+', severity: 'critical' },
     { re: '(((a+)+)+)+', severity: 'critical' }
   ]
-  t.plan(cases.length * 3)
   for (const { re, severity } of cases) {
     const result = safe.analyze(re)
     t.assert.strictEqual(result.safe, false, `Expected ${re} to be unsafe`)
@@ -105,7 +100,6 @@ test('analyze — alternation ReDoS', t => {
     '(?:(a|aa|aaa))+',
     '(x|xx|xxx)+'
   ]
-  t.plan(patterns.length * 3)
   for (const re of patterns) {
     const result = safe.analyze(re)
     t.assert.strictEqual(result.safe, false, `Expected ${re} to be unsafe`)
@@ -149,7 +143,6 @@ test('fix — nested repetition', t => {
     { re: '(a+|b+)+', expect: '(a+|b+)' },
     { re: 'foo|(x+x+)+y', expect: 'foo|(x+x+)y' }
   ]
-  t.plan(cases.length * 2)
   for (const { re, expect: expected } of cases) {
     const result = safe.fix(re)
     t.assert.strictEqual(result.fixed, expected, `Expected ${re} → ${expected}, got ${result.fixed}`)
@@ -165,7 +158,6 @@ test('fix — alternation overlap', t => {
     { re: '(?:(a|aa|aaa))+', expect: 'a+' },
     { re: '(x|xx|xxx)+', expect: 'x+' }
   ]
-  t.plan(cases.length * 2)
   for (const { re, expect: expected } of cases) {
     const result = safe.fix(re)
     t.assert.strictEqual(result.fixed, expected, `Expected ${re} → ${expected}, got ${result.fixed}`)
@@ -180,7 +172,6 @@ test('fix — already safe returns null', t => {
     '(abc|def)+',
     'a+b+'
   ]
-  t.plan(cases.length * 2)
   for (const re of cases) {
     const result = safe.fix(re)
     t.assert.strictEqual(result.safe, true, `Expected ${re} to be safe`)
@@ -194,7 +185,6 @@ test('fix — invalid/unfixable returns null', t => {
     '[abc',
     'abcde(?>hellow)'
   ]
-  t.plan(cases.length)
   for (const re of cases) {
     const result = safe.fix(re)
     t.assert.strictEqual(result.fixed, null, `Expected ${re} fixed to be null`)
@@ -213,7 +203,6 @@ test('fix — general prefix overlap returns null', t => {
     '(cat|cater|caterpillar)+',
     '(?:(ab|abc))+'  // nested group requires recursive findGroupWithOptions
   ]
-  t.plan(cases.length)
   for (const re of cases) {
     const result = safe.fix(re)
     t.assert.strictEqual(result.fixed, null, 'Expected ' + re + ' fixed to be null')
@@ -226,7 +215,6 @@ test('analyze — general prefix overlap', t => {
     '(12|123)+',
     '(?:(ab|abc))+'
   ]
-  t.plan(cases.length * 3)
   for (const re of cases) {
     const result = safe.analyze(re)
     t.assert.strictEqual(result.hasAlternationReDoS, true, re + ' should detect alternation overlap')
