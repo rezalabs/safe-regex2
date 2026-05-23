@@ -14,7 +14,13 @@ permissions:
 
 jobs:
   lock-threads:
+    runs-on: ubuntu-latest
     permissions:
       issues: write
       pull-requests: write
-    uses: fastify/workflows/.github/workflows/lock-threads.yml@v6
+    steps:
+      - uses: dessant/lock-threads@v5
+        with:
+          issue-inactive-days: 30
+          pr-inactive-days: 30
+          log-output: true
