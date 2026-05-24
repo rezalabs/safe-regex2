@@ -1,4 +1,5 @@
 *.log
+coverage/
 .eslint*
 .github/
 .gitignore
@@ -6,8 +7,13 @@
 .npmrc
 .pi/
 AGENTS.md
+CHANGELOG.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md
 eslint.config.js
 example/
 node_modules/
+pi-session-*.html
 test/
 types/index.tst.ts
