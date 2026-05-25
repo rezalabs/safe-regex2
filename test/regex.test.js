@@ -222,6 +222,58 @@ test('analyze — SET-prefix alternation has no auto-fix', t => {
   }
 })
 
+test('analyze — CHAR vs SET prefix overlap', t => {
+  const patterns = [
+    '(a|[a-z])+',
+    '(a|[a-z][a-z])+'
+  ]
+  for (const re of patterns) {
+    const result = safe.analyze(re)
+    t.assert.strictEqual(result.safe, false, `Expected ${re} to be unsafe`)
+    t.assert.strictEqual(result.hasAlternationReDoS, true, `Expected ${re} alternation flag`)
+    t.assert.strictEqual(result.severity, 'high', `Expected ${re} severity high`)
+  }
+})
+
+test('analyze — disjoint CHAR vs SET prefix', t => {
+  const patterns = [
+    '(A|[a-z])+',
+    '(0|[a-z])+'
+  ]
+  for (const re of patterns) {
+    const result = safe.analyze(re)
+    t.assert.strictEqual(result.safe, true, `Expected ${re} to be safe`)
+    t.assert.strictEqual(result.hasAlternationReDoS, false, `Expected ${re} no alternation flag`)
+  }
+})
+
+test('analyze — SET with mixed CHAR and RANGE entries', t => {
+  const result = safe.analyze('([ab]|[a-z])+')
+  t.assert.strictEqual(result.safe, false, 'Expected ([ab]|[a-z])+ to be unsafe')
+  t.assert.strictEqual(result.hasAlternationReDoS, true, 'Expected alternation flag')
+  t.assert.strictEqual(result.severity, 'high', 'Expected severity high')
+})
+
+test('analyze — negated SET prefix overlap', t => {
+  const result = safe.analyze('([^a-z]|[0-9])+')
+  t.assert.strictEqual(result.safe, false, 'Expected ([^a-z]|[0-9])+ to be unsafe')
+  t.assert.strictEqual(result.hasAlternationReDoS, true, 'Expected alternation flag')
+  t.assert.strictEqual(result.severity, 'high', 'Expected severity high')
+})
+
+test('analyze — negated SET disjoint from positive SET', t => {
+  const result = safe.analyze('([^a-z]|[a-z])+')
+  t.assert.strictEqual(result.safe, true, 'Expected ([^a-z]|[a-z])+ to be safe')
+  t.assert.strictEqual(result.hasAlternationReDoS, false, 'Expected no alternation flag')
+})
+
+test('analyze — negated SET overlap via CHAR entry', t => {
+  const result = safe.analyze('([^a-z]|[0])+')
+  t.assert.strictEqual(result.safe, false, 'Expected ([^a-z]|[0])+ to be unsafe')
+  t.assert.strictEqual(result.hasAlternationReDoS, true, 'Expected alternation flag')
+  t.assert.strictEqual(result.severity, 'high', 'Expected severity high')
+})
+
 test('analyze — low severity (rep count)', t => {
   const re = RegExp(Array(27).join('a?') + Array(27).join('a'))
   const result = safe.analyze(re, { limit: 25 })
@@ -367,7 +419,8 @@ test('fix — alternation overlap', t => {
     { re: '(a|aa|aaa)+y', expect: 'a+y' },
     { re: '(?:a|aa|aaa)+', expect: 'a+' },
     { re: '(?:(a|aa|aaa))+', expect: 'a+' },
-    { re: '(x|xx|xxx)+', expect: 'x+' }
+    { re: '(x|xx|xxx)+', expect: 'x+' },
+    { re: '(?:a(?:(a|aa|aaa)))+', expect: 'a+' }
   ]
   for (const { re, expect: expected } of cases) {
     const result = safe.fix(re)
