@@ -140,7 +140,6 @@ dist
 
 # lock files
 bun.lockb
-package-lock.json
 pnpm-lock.yaml
 yarn.lock
 
@@ -151,3 +150,4 @@ yarn.lock
 #tap files
 .tap/
 .pi/
+pi-session-*.html
