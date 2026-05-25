@@ -25,6 +25,7 @@ type FixResult = {
   safe: boolean
   fixed: string | null
   original: string
+  semanticChange: boolean
 }
 
 // ── .analyze() — detailed risk assessment ──

@@ -7,7 +7,7 @@ const { reconstruct } = require('@rezalabs/ret')
 /**
  * Extracts the leading literal character code points from a token stack.
  * Stops at the first non-CHAR token (e.g., SET, GROUP, REPETITION).
- * Used to compare literal prefixes between alternatives for ReDoS detection.
+ * Used by fixAlternationReDoS to collect chars for same-char detection.
  *
  * @param {Array} stack - Array of AST tokens forming one alternative
  * @returns {number[]} Array of character code points
@@ -25,12 +25,149 @@ function getLiteralPrefix (stack) {
 }
 
 /**
- * Checks whether alternatives inside a quantifier have overlapping literal
- * prefixes, which causes catastrophic backtracking.
+ * Extracts the leading leaf tokens (CHAR and SET nodes) from a token stack.
+ * Stops at the first non-leaf token (GROUP, REPETITION, POSITION, etc.).
+ * Generalizes getLiteralPrefix to include character classes and predefined sets.
  *
- * When one alternative is a prefix of another (e.g., `a` vs `aa` inside `+`),
+ * @param {Array} stack - Array of AST tokens forming one alternative
+ * @returns {Array} Array of CHAR or SET AST nodes
+ */
+function getPrefixTokens (stack) {
+  const tokens = []
+  for (let i = 0; i < stack.length; i++) {
+    const node = stack[i]
+    if (node.type === types.CHAR || node.type === types.SET) {
+      tokens.push(node)
+    } else {
+      break
+    }
+  }
+  return tokens
+}
+
+/**
+ * Checks whether a code point matches any entry in a SET node's internal
+ * set array. Each entry is either a CHAR (exact code point) or RANGE
+ * (inclusive interval).
+ *
+ * @param {number} codePoint - Unicode code point to test
+ * @param {Array} entries - Array of CHAR or RANGE tokens from a SET node
+ * @returns {boolean} true if codePoint matches any entry
+ */
+function codeInSetEntries (codePoint, entries) {
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]
+    if (entry.type === types.CHAR && entry.value === codePoint) return true
+    if (entry.type === types.RANGE && codePoint >= entry.from && codePoint <= entry.to) return true
+  }
+  return false
+}
+
+/**
+ * Checks whether a code point is matched by a SET node, considering negation.
+ *
+ * @param {number} codePoint - Unicode code point to test
+ * @param {object} setNode - SET AST node with set[] and not properties
+ * @returns {boolean} true if the SET node matches this code point
+ */
+function codeMatchesSet (codePoint, setNode) {
+  const inEntries = codeInSetEntries(codePoint, setNode.set)
+  return setNode.not ? !inEntries : inEntries
+}
+
+/**
+ * Checks whether two SET entry tokens (CHAR or RANGE) have overlapping
+ * character ranges.
+ *
+ * @param {object} a - CHAR or RANGE token
+ * @param {object} b - CHAR or RANGE token
+ * @returns {boolean} true if the entries share at least one code point
+ */
+function setEntriesOverlap (a, b) {
+  if (a.type === types.RANGE && b.type === types.RANGE) {
+    return a.from <= b.to && b.from <= a.to
+  }
+  if (a.type === types.CHAR && b.type === types.CHAR) {
+    return a.value === b.value
+  }
+  // CHAR vs RANGE
+  const charVal = a.type === types.CHAR ? a.value : b.value
+  const range = a.type === types.RANGE ? a : b
+  return charVal >= range.from && charVal <= range.to
+}
+
+/**
+ * Checks whether two SET nodes can match at least one common character.
+ *
+ * For two non-negated sets, checks pairwise overlap between their entries.
+ * For two negated sets, always returns true (complements share characters).
+ * For mixed negation, checks whether the positive set contains any character
+ * not excluded by the negated set.
+ *
+ * @param {object} a - SET AST node
+ * @param {object} b - SET AST node
+ * @returns {boolean} true if there exists at least one character matched by both
+ */
+function setsOverlap (a, b) {
+  // Both negated: complements of finite sets always share characters
+  if (a.not && b.not) return true
+
+  // One negated, one not
+  if (a.not !== b.not) {
+    const positive = a.not ? b : a
+    const negative = a.not ? a : b
+    // Check if the positive set has any char not in the negated set's exclusion list
+    for (let i = 0; i < positive.set.length; i++) {
+      const entry = positive.set[i]
+      if (entry.type === types.CHAR) {
+        if (!codeInSetEntries(entry.value, negative.set)) return true
+      } else if (entry.type === types.RANGE) {
+        // If the range's start is not excluded, there is overlap
+        if (!codeInSetEntries(entry.from, negative.set)) return true
+        // Also check the end of the range
+        if (entry.from !== entry.to && !codeInSetEntries(entry.to, negative.set)) return true
+      }
+    }
+    return false
+  }
+
+  // Both non-negated: check pairwise overlap between entries
+  for (let i = 0; i < a.set.length; i++) {
+    for (let j = 0; j < b.set.length; j++) {
+      if (setEntriesOverlap(a.set[i], b.set[j])) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Checks whether two AST tokens (CHAR or SET) can match at least one
+ * common character. This is the foundation of the generalized prefix-overlap
+ * detection: two alternatives cause ReDoS when their leading tokens can match
+ * the same character and one is a prefix of the other.
+ *
+ * @param {object} a - CHAR or SET AST node
+ * @param {object} b - CHAR or SET AST node
+ * @returns {boolean} true if both tokens can match the same character
+ */
+function tokensOverlap (a, b) {
+  if (a.type === types.CHAR && b.type === types.CHAR) return a.value === b.value
+  if (a.type === types.CHAR && b.type === types.SET) return codeMatchesSet(a.value, b)
+  if (a.type === types.SET && b.type === types.CHAR) return codeMatchesSet(b.value, a)
+  if (a.type === types.SET && b.type === types.SET) return setsOverlap(a, b)
+  return false
+}
+
+/**
+ * Checks whether alternatives inside a quantifier have overlapping prefixes,
+ * which causes catastrophic backtracking.
+ *
+ * When one alternative's prefix matches the same characters as the start of
+ * another (e.g., `a` vs `aa`, `[a-z]` vs `[a-z][a-z]`, `\d` vs `\d\d`),
  * the regex engine can partition the same input in exponentially many ways.
- * Example: `(a|aa|aaa)+` on a string of `a`s — 2^(n-1) paths.
+ *
+ * Detects overlap for literal characters (CHAR), character classes (SET),
+ * predefined shorthand sets (`\d`, `\w`, `\s`), and the dot metacharacter.
  *
  * @param {Array} options - Array of alternative token stacks
  * @returns {boolean} true if any pair has a prefix-overlap problem
@@ -39,12 +176,12 @@ function hasAlternationReDoS (options) {
   if (!Array.isArray(options) || options.length < 2) return false
 
   const prefixes = options.map(function (opt) {
-    return getLiteralPrefix(opt)
+    return getPrefixTokens(opt)
   }).filter(function (p) {
     return p.length > 0
   })
 
-  // Need at least two alternatives with literal prefixes to have overlap
+  // Need at least two alternatives with prefix tokens to have overlap
   if (prefixes.length < 2) return false
 
   for (let i = 0; i < prefixes.length; i++) {
@@ -52,13 +189,12 @@ function hasAlternationReDoS (options) {
       const a = prefixes[i]
       const b = prefixes[j]
 
-      // Check if one is a prefix of the other (shorter is prefix of longer)
       const shorter = a.length <= b.length ? a : b
       const longer = a.length <= b.length ? b : a
 
       let prefixMatch = true
       for (let k = 0; k < shorter.length; k++) {
-        if (shorter[k] !== longer[k]) {
+        if (!tokensOverlap(shorter[k], longer[k])) {
           prefixMatch = false
           break
         }
@@ -205,10 +341,11 @@ function isRegExp (x) {
  * @param {string|RegExp} re - Regular expression to fix
  * @param {object} [options]
  * @param {number} [options.limit=25] - Repetition limit (passed to walk)
- * @returns {{ safe: boolean, fixed: string|null, original: string }}
- *     Returns { safe: true, fixed: null } if already safe.
- *     Returns { safe: false, fixed: '...' } with a suggested fix.
- *     Returns { safe: false, fixed: null } if cannot auto-fix.
+ * @returns {{ safe: boolean, fixed: string|null, original: string, semanticChange: boolean }}
+ *     Returns { safe: true, fixed: null, semanticChange: false } if already safe.
+ *     Returns { safe: false, fixed: '...', semanticChange: true|false } with a suggested fix.
+ *     Returns { safe: false, fixed: null, semanticChange: false } if cannot auto-fix.
+ *     semanticChange is true when the fixed regex may not match the same set of strings.
  */
 function fixRegex (re, options) {
   const limit = options?.limit ?? 25
@@ -222,12 +359,12 @@ function fixRegex (re, options) {
   try {
     ast = parse(source)
   } catch {
-    return { safe: false, fixed: null, original: source }
+    return { safe: false, fixed: null, original: source, semanticChange: false }
   }
 
   // Check if already safe
   if (walk(ast, { reps: 0, limit }, 0)) {
-    return { safe: true, fixed: null, original: source }
+    return { safe: true, fixed: null, original: source, semanticChange: false }
   }
 
   // Try to fix: clone the AST and apply transforms
@@ -237,16 +374,16 @@ function fixRegex (re, options) {
   try {
     fixed = reconstruct(fixedAst)
   } catch {
-    return { safe: false, fixed: null, original: source }
+    return { safe: false, fixed: null, original: source, semanticChange: false }
   }
 
   // Verify the fix is actually safe
   const stillUnsafe = !walk(parse(fixed), { reps: 0, limit }, 0)
   if (stillUnsafe) {
-    return { safe: false, fixed: null, original: source }
+    return { safe: false, fixed: null, original: source, semanticChange: false }
   }
 
-  return { safe: false, fixed, original: source }
+  return { safe: false, fixed, original: source, semanticChange: true }
 }
 
 /**

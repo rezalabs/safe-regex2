@@ -35,7 +35,14 @@ const bad = [
   /(a|aa|aaa)+/,
   /(a|aa|aaa)+y/,
   /(ab|abc)+/,
-  /(x|xx|xxx)+/
+  /(x|xx|xxx)+/,
+  // SET-prefix alternation overlap (character classes, dot, shorthand sets)
+  /([a-z]|[a-z][a-z])+/,
+  /(.|..)+/,
+  /([ab]|[ab][ab])+/,
+  /([0-9]|[0-9][0-9])+/,
+  /(\d|\d\d)+/,
+  /([a]b|[a]bc)+/
 ]
 
 test('unsafe regex', t => {
@@ -172,6 +179,47 @@ test('analyze — alternation ReDoS reports reason', t => {
   const result = safe.analyze('(a|aa|aaa)+')
   const hasOverlapReason = result.reasons.some(r => r.includes('verlapping'))
   t.assert.strictEqual(hasOverlapReason, true, 'Should mention overlapping prefixes in reasons')
+})
+
+test('analyze — SET-prefix alternation ReDoS', t => {
+  const patterns = [
+    '([a-z]|[a-z][a-z])+',
+    '(.|..)+',
+    '([ab]|[ab][ab])+',
+    '([0-9]|[0-9][0-9])+',
+    '(\\d|\\d\\d)+',
+    '([a]b|[a]bc)+'
+  ]
+  for (const re of patterns) {
+    const result = safe.analyze(re)
+    t.assert.strictEqual(result.safe, false, `Expected ${re} to be unsafe`)
+    t.assert.strictEqual(result.hasAlternationReDoS, true, `Expected ${re} alternation flag`)
+    t.assert.strictEqual(result.severity, 'high', `Expected ${re} severity high`)
+  }
+})
+
+test('analyze — disjoint SET-prefix alternation is safe', t => {
+  const patterns = [
+    '([a-z]|[0-9])+',
+    '([a-z]|[A-Z])+'
+  ]
+  for (const re of patterns) {
+    const result = safe.analyze(re)
+    t.assert.strictEqual(result.safe, true, `Expected ${re} to be safe`)
+    t.assert.strictEqual(result.hasAlternationReDoS, false, `Expected ${re} no alternation flag`)
+  }
+})
+
+test('analyze — SET-prefix alternation has no auto-fix', t => {
+  const patterns = [
+    '([a-z]|[a-z][a-z])+',
+    '(.|..)+',
+    '([ab]|[ab][ab])+'
+  ]
+  for (const re of patterns) {
+    const result = safe.analyze(re)
+    t.assert.strictEqual(result.fix, null, `Expected ${re} to have no fix`)
+  }
 })
 
 test('analyze — low severity (rep count)', t => {
@@ -402,6 +450,24 @@ test('fix — coerces {toString} object', t => {
   t.assert.strictEqual(result.safe, false, 'Invalid regex from toString')
   t.assert.strictEqual(result.fixed, null, 'Unfixable')
   t.assert.strictEqual(result.original, '[abc', 'Original from toString')
+})
+
+test('fix — semanticChange is true when fix is produced', t => {
+  const cases = ['(a+)+', '(a|aa|aaa)+', '(x+x+)+y']
+  for (const re of cases) {
+    const result = safe.fix(re)
+    t.assert.strictEqual(result.semanticChange, true, `Expected ${re} to have semanticChange: true`)
+  }
+})
+
+test('fix — semanticChange is false for already safe input', t => {
+  const result = safe.fix('[a-z]+')
+  t.assert.strictEqual(result.semanticChange, false, 'Safe input should have semanticChange: false')
+})
+
+test('fix — semanticChange is false for invalid input', t => {
+  const result = safe.fix('[abc')
+  t.assert.strictEqual(result.semanticChange, false, 'Invalid input should have semanticChange: false')
 })
 
 // ── export structure ─────────────────────────────────────────────────

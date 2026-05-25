@@ -4,6 +4,12 @@ type FixResult = {
   safe: boolean
   fixed: string | null
   original: string
+  /**
+   * When true, the fixed regex may not match the same set of strings
+   * as the original. Do not apply automatically without verifying that
+   * the behavior change is acceptable.
+   */
+  semanticChange: boolean
 }
 
 type AnalyzeResult = {
