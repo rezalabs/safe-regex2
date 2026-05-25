@@ -1,5 +1,26 @@
 # Changelog
 
+## 6.1.1 — 2026-05-25
+
+### Fix
+
+- **Eliminate false positive for mutually exclusive alternatives in nested
+  repetition** — Patterns like `(a+b+|c+d+)+y`, `(a+b+)+`, and
+  `([a-z]+[0-9]+)+` were incorrectly flagged as unsafe (star height > 1).
+  These are now correctly recognized as safe because their tokens have
+  mutually exclusive character sets — the regex engine can only parse each
+  iteration in one way, preventing exponential backtracking.
+
+  The check implements the condition from
+  [regular-expressions.info/catastrophic.html](https://www.regular-expressions.info/catastrophic.html):
+  nested quantifiers are safe when, for every alternative inside the repeated
+  group, the start token is non-optional, disjoint from the following token
+  within the same alternative, and disjoint from the start of all other
+  alternatives.
+
+  Single-token alternatives like `(a+|b+)+` remain correctly unsafe, because
+  the token's charset overlaps with itself across iterations.
+
 ## 6.1.0 — 2026-05-25
 
 ### Security fix

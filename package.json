@@ -1,6 +1,6 @@
 {
   "name": "@rezalabs/safe-regex2",
-  "version": "6.1.0",
+  "version": "6.1.1",
   "description": "Detect and fix catastrophic backtracking (ReDoS) in regular expressions with severity scoring and auto-fix",
   "main": "index.js",
   "type": "commonjs",
