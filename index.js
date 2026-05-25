@@ -159,6 +159,149 @@ function tokensOverlap (a, b) {
 }
 
 /**
+ * Extracts the first leaf token (CHAR or SET) from a node subtree by
+ * following the first child at each level. For alternatives, returns
+ * the first leaf of the first alternative only.
+ *
+ * @param {*} node - AST node
+ * @returns {object|null} CHAR or SET node, or null if not determinable
+ */
+function getFirstLeaf (node) {
+  if (!node) return null
+  if (node.type === types.CHAR || node.type === types.SET) return node
+  if (node.type === types.REPETITION) return getFirstLeaf(node.value)
+  if (node.stack && node.stack.length > 0) return getFirstLeaf(node.stack[0])
+  if (node.options && node.options.length > 0) return getFirstLeaf(node.options[0][0])
+  return null
+}
+
+/**
+ * Collects all possible first leaf tokens (CHAR or SET) from a node,
+ * including all alternatives in alternation groups. Used when the first
+ * element of a repeated path is itself an alternation, so every
+ * alternative's starting charset must be checked against the following token.
+ *
+ * @param {*} node - AST node
+ * @returns {object[]} Array of CHAR or SET nodes
+ */
+function getAllFirstLeaves (node) {
+  if (!node) return []
+  if (node.type === types.CHAR || node.type === types.SET) return [node]
+  if (node.type === types.REPETITION) return getAllFirstLeaves(node.value)
+  if (node.stack && node.stack.length > 0) return getAllFirstLeaves(node.stack[0])
+  if (node.options) {
+    const leaves = []
+    for (let i = 0; i < node.options.length; i++) {
+      if (node.options[i].length > 0) {
+        const childLeaves = getAllFirstLeaves(node.options[i][0])
+        for (let j = 0; j < childLeaves.length; j++) {
+          leaves.push(childLeaves[j])
+        }
+      }
+    }
+    return leaves
+  }
+  return []
+}
+
+/**
+ * Checks whether a node must match at least one character (is non-optional).
+ * CHAR and SET always match exactly one character.  REPETITION is
+ * non-optional when min >= 1.  Groups are non-optional when their first
+ * element is non-optional (for alternation groups, ALL alternatives must
+ * be non-optional).
+ *
+ * @param {*} node - AST node
+ * @returns {boolean} true if the node cannot match zero characters
+ */
+function isNonOptional (node) {
+  if (!node || typeof node !== 'object') return false
+  if (node.type === types.CHAR || node.type === types.SET) return true
+  if (node.type === types.POSITION) return false
+  if (node.type === types.REPETITION) return node.min >= 1
+  // GROUP (type 1) with stack or options — check the first child
+  if (node.stack && node.stack.length > 0) return isNonOptional(node.stack[0])
+  if (node.options) {
+    for (let i = 0; i < node.options.length; i++) {
+      if (node.options[i].length === 0 || !isNonOptional(node.options[i][0])) return false
+    }
+    return true
+  }
+  return false
+}
+
+/**
+ * Checks whether the content of a repeated group can be matched
+ * unambiguously, making nested repetitions safe from catastrophic
+ * backtracking.
+ *
+ * Implements the condition from regular-expressions.info/catastrophic.html:
+ * nested quantifiers are safe when, for EVERY alternative inside the
+ * repeated group:
+ *   1. The start token is not optional (matches at least one character)
+ *   2. The start token's charset is disjoint from the following token's
+ *      charset within the same alternative
+ *   3. The start tokens of all alternatives are pairwise disjoint
+ *
+ * When all three conditions hold, the regex engine can parse each
+ * iteration in exactly one way — no exponential partitioning of input.
+ *
+ * @param {*} node - AST node (the value of the outer REPETITION)
+ * @returns {boolean} true if the repeated content is unambiguous
+ */
+function isRepeatedContentUnambiguous (node) {
+  let paths
+  if (node.options) {
+    paths = node.options
+  } else if (node.stack) {
+    paths = [node.stack]
+  } else {
+    paths = [[node]]
+  }
+
+  for (let p = 0; p < paths.length; p++) {
+    const path = paths[p]
+    if (path.length === 0) return false
+
+    const first = path[0]
+    if (!isNonOptional(first)) return false
+
+    // Condition 2: the alternative must have a following token whose
+    // charset is disjoint from the start.  A single-token alternative
+    // cannot satisfy this — the token's charset overlaps with itself
+    // across iterations (e.g. (a+)+).
+    if (path.length < 2) return false
+
+    const firstLeaves = getAllFirstLeaves(first)
+    const secondLeaf = getFirstLeaf(path[1])
+    if (firstLeaves.length === 0 || !secondLeaf) return false
+
+    for (let i = 0; i < firstLeaves.length; i++) {
+      if (tokensOverlap(firstLeaves[i], secondLeaf)) return false
+    }
+  }
+
+  // Condition 3: pairwise disjoint start tokens across alternatives
+  if (paths.length > 1) {
+    const allFirsts = []
+    for (let p = 0; p < paths.length; p++) {
+      allFirsts.push(getAllFirstLeaves(paths[p][0]))
+    }
+    for (let i = 0; i < allFirsts.length; i++) {
+      for (let j = i + 1; j < allFirsts.length; j++) {
+        for (let ai = 0; ai < allFirsts[i].length; ai++) {
+          for (let bi = 0; bi < allFirsts[j].length; bi++) {
+            if (tokensOverlap(allFirsts[i][ai], allFirsts[j][bi])) return false
+          }
+        }
+      }
+    }
+  }
+
+  return true
+}
+
+/**
  * Checks whether alternatives inside a quantifier have overlapping prefixes,
  * which causes catastrophic backtracking.
  *
@@ -271,6 +414,14 @@ function walk (node, opts, starHeight) {
     // where one literal prefix is a prefix of another (e.g., (a|aa|aaa)+)
     // Recursively searches through the value subtree for nested alternatives
     if (findOverlappingAlternatives(node.value)) return false
+
+    // If the repeated content is unambiguous (mutually exclusive tokens),
+    // nested repetitions are safe — the regex engine can only parse each
+    // iteration one way.  Recurse with starHeight = 0 so inner REPETITION
+    // nodes start counting from scratch instead of triggering starHeight > 1.
+    if (isRepeatedContentUnambiguous(node.value)) {
+      return walk(node.value, opts, 0)
+    }
   }
 
   const options = node.options || node.value?.options
@@ -752,19 +903,28 @@ function analyze (re, options) {
     hasStaticSuffix
   })
 
-  // Build reasons
-  const reasons = []
-  if (info.maxStarHeight >= 2) {
-    reasons.push('Nested repetition detected (star height ' + info.maxStarHeight + ')')
-  }
-  if (hasAlternation) {
-    reasons.push('Alternatives with overlapping prefixes inside quantifier')
-  }
-  if (info.repCount > limit) {
-    reasons.push('Exceeded repetition limit: ' + info.repCount + ' > ' + limit)
-  }
+  // Determine safety using walk(), which accounts for unambiguous nested
+  // repetition.  This may disagree with severity (e.g. starHeight >= 2 but
+  // tokens are mutually exclusive) — walk() is authoritative for safety.
+  const safe = walk(ast, { reps: 0, limit }, 0)
 
-  const safe = severity === 'none'
+  // Build reasons and final severity — only when actually unsafe
+  const reasons = []
+  let finalSeverity = 'none'
+
+  if (!safe) {
+    finalSeverity = severity
+
+    if (info.maxStarHeight >= 2) {
+      reasons.push('Nested repetition detected (star height ' + info.maxStarHeight + ')')
+    }
+    if (hasAlternation) {
+      reasons.push('Alternatives with overlapping prefixes inside quantifier')
+    }
+    if (info.repCount > limit) {
+      reasons.push('Exceeded repetition limit: ' + info.repCount + ' > ' + limit)
+    }
+  }
 
   // Try to fix if unsafe
   let fix = null
@@ -775,7 +935,7 @@ function analyze (re, options) {
 
   return {
     safe,
-    severity,
+    severity: finalSeverity,
     reasons,
     starHeight: info.maxStarHeight,
     repCount: info.repCount,

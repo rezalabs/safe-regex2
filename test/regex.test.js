@@ -14,7 +14,13 @@ const good = [
   RegExp(Array(26).join('a?') + Array(26).join('a')),
   /(a|b|c)+/,
   /(abc|def)+/,
-  /(abc|abd)+/
+  /(abc|abd)+/,
+  // Unambiguous nested repetition — mutually exclusive tokens
+  /(a+b+|c+d+)+y/,
+  /(a+b+)+/,
+  /([a-z]+[0-9]+)+/,
+  /(\d+\s+)+/,
+  /(a+b+|c+d+|e+f+)+/
 ]
 
 test('safe regex', t => {
@@ -392,6 +398,128 @@ test('analyze — empty string pattern', t => {
   t.assert.strictEqual(result.severity, 'none')
   t.assert.strictEqual(result.repCount, 0)
   t.assert.strictEqual(result.starHeight, 0)
+})
+
+// ── unambiguous nested repetition ──────────────────────────────────
+
+test('unambiguous — mutually exclusive alternatives are safe', t => {
+  const patterns = [
+    '(a+b+|c+d+)+',
+    '(a+b+|c+d+)+y',
+    '(a+b+|c+d+|e+f+)+',
+    '(a+b+)+y',
+    '(a+b+)+',
+    '([a-z]+[0-9]+)+',
+    '(\\d+\\s+)+',
+    '(\\d+[a-z]+)+'
+  ]
+  for (const re of patterns) {
+    const result = safe(re)
+    t.assert.strictEqual(result, true, 'Expected ' + re + ' to be safe')
+  }
+})
+
+test('unambiguous — single-token alternatives remain unsafe', t => {
+  const patterns = [
+    '(a+|b+)+',
+    '(a+|b+)+y',
+    '(\\d+|\\s+)+'
+  ]
+  for (const re of patterns) {
+    const result = safe(re)
+    t.assert.strictEqual(result, false, 'Expected ' + re + ' to be unsafe')
+  }
+})
+
+test('unambiguous — same-char tokens remain unsafe', t => {
+  const patterns = [
+    '(x+x+)+y',
+    '(a+a+)+',
+    '(\\d+\\d+)+'
+  ]
+  for (const re of patterns) {
+    const result = safe(re)
+    t.assert.strictEqual(result, false, 'Expected ' + re + ' to be unsafe')
+  }
+})
+
+test('unambiguous — optional start is unsafe', t => {
+  const result = safe('(a*b+)+')
+  t.assert.strictEqual(result, false, 'Optional start (a*) should be unsafe')
+})
+
+test('unambiguous — cross-alternative overlap is unsafe', t => {
+  const patterns = [
+    '(a+b+|a+c+)+',
+    '(a+b+|[a-z]+c+)+',
+    '([a-z]+[0-9]+|[a-z]+[A-Z]+)+'
+  ]
+  for (const re of patterns) {
+    const result = safe(re)
+    t.assert.strictEqual(result, false, 'Expected ' + re + ' to be unsafe')
+  }
+})
+
+test('unambiguous — alternation inside first token is checked', t => {
+  // ((a|c)c+)+: the 'c' alternative overlaps with the following c+
+  const result = safe('((a|c)c+)+')
+  t.assert.strictEqual(result, false, 'Inner alternation overlap with following token')
+})
+
+test('unambiguous — analyze reports safe for unambiguous nested rep', t => {
+  const result = safe.analyze('(a+b+|c+d+)+y')
+  t.assert.strictEqual(result.safe, true)
+  t.assert.strictEqual(result.severity, 'none')
+  t.assert.deepStrictEqual(result.reasons, [])
+  // starHeight is still reported as diagnostic info
+  t.assert.strictEqual(result.starHeight, 2, 'Star height is diagnostic, not a safety flag')
+})
+
+test('unambiguous — analyze reports unsafe for truly unsafe nested rep', t => {
+  const result = safe.analyze('(a+)+y')
+  t.assert.strictEqual(result.safe, false)
+  t.assert.strictEqual(result.severity, 'low', 'Static suffix mitigates but still unsafe')
+  t.assert.strictEqual(result.starHeight, 2)
+  t.assert.ok(result.reasons.length > 0)
+})
+
+test('unambiguous — fix no longer attempts to fix safe nested rep', t => {
+  const result = safe.fix('(a+b+|c+d+)+y')
+  t.assert.strictEqual(result.safe, true, 'Should be safe, no fix needed')
+  t.assert.strictEqual(result.fixed, null)
+})
+
+test('unambiguous — alternation group as first element', t => {
+  // First element is an alternation group — getAllFirstLeaves must check
+  // all alternatives against the following token
+  const safe1 = safe('((a|b)c+)+')
+  t.assert.strictEqual(safe1, true, '((a|b)c+)+ should be safe: a,b disjoint from c')
+
+  // c appears in both the alternation and the following token — unsafe
+  const unsafe1 = safe('((a|c)c+)+')
+  t.assert.strictEqual(unsafe1, false, '((a|c)c+)+ should be unsafe: c overlaps c+')
+})
+
+test('unambiguous — POSITION inside path does not crash', t => {
+  // Edge case: a path starting with a POSITION node. These can't be
+  // non-optional in the isNonOptional sense, so isRepeatedContentUnambiguous
+  // returns false and the pattern falls through to normal star-height checking.
+  t.assert.strictEqual(safe('(^a+b+)+'), false, 'Anchor before nested rep is still unsafe')
+})
+
+test('unambiguous — following token is POSITION (no extractable leaf)', t => {
+  // \\b+ is parsed as REPETITION wrapping POSITION — getFirstLeaf returns null
+  // for POSITION because it has no stack/options/value.  The guard in
+  // isRepeatedContentUnambiguous catches this and falls through to star-height.
+  t.assert.strictEqual(safe(String.raw`(a+\b+)+`), false, 'Word boundary as following token')
+})
+
+test('unambiguous — nested alternation group checked against following token', t => {
+  // ((a|b)c+)+: first element is an alternation — getAllFirstLeaves must
+  // collect both alternatives' starts and check each against the following token
+  t.assert.strictEqual(safe('((a|b)c+)+'), true, '((a|b)c+)+ safe: a,b disjoint from c')
+  // Overlap: c is in the alternation AND the following token
+  t.assert.strictEqual(safe('((a|c)c+)+'), false, '((a|c)c+)+ unsafe: c overlaps c+')
 })
 
 // ── fix() ────────────────────────────────────────────────────────────
